@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "github_packager"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+  "beautifulsoup4",
+  "docker",
+  "fastcore",
+  "ghapi",
+  "requests",
+  "unidiff",
+]
+
+[project.scripts]
+github-packager = "packager:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+py-modules = [
+  "packager",
+  "config",
+  "github_api",
+  "patches",
+  "docker_tools",
+  "instances",
+  "images",
+]
