@@ -47,6 +47,7 @@ class Repo:
         self.name = name
         self.token = token
         self.api = GhApi(token=token)
+        print(f"GitHub: init repo {owner}/{name}")
         self.repo = self.call_api(self.api.repos.get, owner=owner, repo=name)
 
     def call_api(self, func, **kwargs):
@@ -59,6 +60,7 @@ class Repo:
         Returns:
             API response object or None when not found.
         """
+        print(f"GitHub: call api {getattr(func, '__name__', str(func))}")
         while True:
             try:
                 return func(**kwargs)
@@ -84,6 +86,7 @@ class Repo:
             Items returned by the paginated endpoint.
         """
         page = 1
+        print(f"GitHub: paginate {getattr(func, '__name__', str(func))} per_page={per_page}")
         args = {
             "owner": self.owner,
             "repo": self.name,
@@ -91,6 +94,7 @@ class Repo:
             **kwargs,
         }
         while True:
+            print(f"GitHub: fetch page {page}")
             values = self.call_api(func, page=page, **args)
             if values is None:
                 break
@@ -113,6 +117,7 @@ class Repo:
         Returns:
             Iterator of pull requests.
         """
+        print(f"GitHub: list pulls state={state}")
         return self.get_all_loop(
             self.api.pulls.list,
             per_page=per_page,
@@ -120,19 +125,21 @@ class Repo:
             state=state,
         )
 
-    def extract_resolved_issues(self, pull) -> list[str]:
-        """Extract issue numbers referenced as resolved by a pull request.
+    def extract_resolved_issues(self, pull) -> tuple[list[str], list[str]]:
+        """Extract issue numbers referenced in a pull request and commit messages.
 
         Args:
             pull: Pull request object from the API.
 
         Returns:
-            List of issue numbers referenced with close keywords.
+            Tuple of (issue_numbers, commit_messages).
         """
         issues_pat = re.compile(r"(\w+)\s+\#(\d+)")
+        plain_pat = re.compile(r"#(\d+)")
         comments_pat = re.compile(r"(?s)<!--.*?-->")
         text = pull.title if pull.title else ""
         text += "\n" + (pull.body if pull.body else "")
+        print(f"GitHub: collect commits for PR {pull.number}")
         commits = list(self.get_all_loop(self.api.pulls.list_commits, pull_number=pull.number))
         commit_messages = [commit.commit.message for commit in commits]
         text += "\n" + "\n".join(commit_messages)
@@ -142,7 +149,13 @@ class Repo:
         for word, issue_num in references:
             if word.lower() in PR_KEYWORDS:
                 resolved_issues_set.add(issue_num)
-        return list(resolved_issues_set)
+        if resolved_issues_set:
+            print(f"GitHub: resolved issues {sorted(resolved_issues_set)}")
+            return list(resolved_issues_set), commit_messages
+        fallback_refs = list(dict.fromkeys(plain_pat.findall(text)))
+        if fallback_refs:
+            print(f"GitHub: fallback issues {fallback_refs}")
+        return fallback_refs, commit_messages
 
 
 def detect_language(repo: Repo) -> str:
@@ -154,6 +167,7 @@ def detect_language(repo: Repo) -> str:
     Returns:
         Language group key.
     """
+    print("GitHub: detect language")
     langs = repo.call_api(repo.api.repos.list_languages, owner=repo.owner, repo=repo.name)
     if not langs:
         return "python"
@@ -173,6 +187,7 @@ def fetch_readme(repo: Repo) -> str:
     Returns:
         README content as text.
     """
+    print("GitHub: fetch README")
     readme = repo.call_api(repo.api.repos.get_readme, owner=repo.owner, repo=repo.name)
     if not readme:
         return ""
@@ -197,6 +212,7 @@ def extract_problem_statement_and_hints(pull: dict, repo: Repo) -> tuple[str, st
     text = ""
     all_hint_texts = list()
     for issue_number in pull["resolved_issues"]:
+        print(f"GitHub: fetch issue {issue_number}")
         issue = repo.call_api(
             repo.api.issues.get,
             owner=repo.owner,
@@ -212,7 +228,22 @@ def extract_problem_statement_and_hints(pull: dict, repo: Repo) -> tuple[str, st
         for comment in comments:
             if comment.body:
                 all_hint_texts.append(comment.body)
-    return text.strip(), "\n".join(all_hint_texts).strip()
+    problem_text = text.strip()
+    if not problem_text:
+        title = pull.get("title") or ""
+        body = pull.get("body") or ""
+        problem_text = f"{title}\n{body}".strip()
+    commit_messages = pull.get("commit_messages") or []
+    hints_text = "\n".join(all_hint_texts).strip()
+    if commit_messages:
+        commit_text = "\n".join(commit_messages).strip()
+        if hints_text:
+            hints_text = f"{hints_text}\n{commit_text}"
+        else:
+            hints_text = commit_text
+    if not problem_text and commit_messages:
+        problem_text = "\n".join(commit_messages).strip()
+    return problem_text, hints_text
 
 
 def extract_problem_statement_and_hints_django(pull: dict, repo: Repo) -> tuple[str, str]:
@@ -228,6 +259,7 @@ def extract_problem_statement_and_hints_django(pull: dict, repo: Repo) -> tuple[
     text = ""
     all_hints_text = list()
     for issue_number in pull["resolved_issues"]:
+        print(f"GitHub: fetch django ticket {issue_number}")
         url = f"https://code.djangoproject.com/ticket/{issue_number}"
         resp = requests.get(url)
         if resp.status_code != 200:
@@ -242,12 +274,28 @@ def extract_problem_statement_and_hints_django(pull: dict, repo: Repo) -> tuple[
         body_text = re.sub(r"\s+", " ", body.get_text()).strip() if body else ""
         text += f"{title_text}\n{body_text}\n"
         all_hints_text.append(body_text)
-    return text.strip(), "\n".join(all_hints_text).strip()
+    problem_text = text.strip()
+    if not problem_text:
+        title = pull.get("title") or ""
+        body = pull.get("body") or ""
+        problem_text = f"{title}\n{body}".strip()
+    commit_messages = pull.get("commit_messages") or []
+    hints_text = "\n".join(all_hints_text).strip()
+    if commit_messages:
+        commit_text = "\n".join(commit_messages).strip()
+        if hints_text:
+            hints_text = f"{hints_text}\n{commit_text}"
+        else:
+            hints_text = commit_text
+    if not problem_text and commit_messages:
+        problem_text = "\n".join(commit_messages).strip()
+    return problem_text, hints_text
 
 
 def iter_pulls(
     repo: Repo,
     max_pulls: Optional[int],
+    max_issues: Optional[int],
     issue_numbers: Optional[set[str]],
 ) -> Iterable[dict]:
     """Yield pull requests that resolve issues and match optional filters.
@@ -255,20 +303,29 @@ def iter_pulls(
     Args:
         repo: Repository API wrapper.
         max_pulls: Optional maximum number of pulls to yield.
+        max_issues: Optional maximum number of unique issues to collect.
         issue_numbers: Optional set of issue numbers to include.
 
     Yields:
         Pull request dictionaries with resolved issues.
     """
+    seen_issues = set()
+    print("GitHub: iterate pulls")
     for i_pull, pull in enumerate(repo.get_all_pulls(state="closed")):
-        resolved = repo.extract_resolved_issues(pull)
-        if not resolved:
-            continue
-        if issue_numbers and not any(x in issue_numbers for x in resolved):
+        resolved, commit_messages = repo.extract_resolved_issues(pull)
+        if issue_numbers:
+            if not resolved or not any(x in issue_numbers for x in resolved):
+                continue
+        if not resolved and not commit_messages:
             continue
         pull_dict = obj2dict(pull)
         pull_dict["resolved_issues"] = resolved
+        pull_dict["commit_messages"] = commit_messages
         yield pull_dict
+        if max_issues is not None and resolved:
+            seen_issues.update(resolved)
+            if len(seen_issues) >= max_issues:
+                break
         if max_pulls is not None and i_pull >= max_pulls:
             break
 
@@ -283,6 +340,7 @@ def create_repo(repo_url: str) -> Repo:
         Repo instance.
     """
     repo_name = normalize_repo(repo_url)
+    print(f"GitHub: create repo client for {repo_name}")
     owner, name = repo_name.split("/")
     token = os.environ.get("GITHUB_TOKEN")
     return Repo(owner, name, token=token)

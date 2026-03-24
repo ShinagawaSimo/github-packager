@@ -45,6 +45,7 @@ def build_image(
     logger = setup_logger(image_name, build_dir / "build_image.log")
     dockerfile_path = build_dir / "Dockerfile"
     dockerfile_path.write_text(dockerfile, encoding="utf-8")
+    print(f"Docker: build start ({image_name})")
     client = docker.from_env()
     response = client.api.build(
         path=str(build_dir),
@@ -60,3 +61,4 @@ def build_image(
             logger.info(chunk["stream"].rstrip())
         elif "errorDetail" in chunk:
             raise RuntimeError(chunk["errorDetail"]["message"])
+    print(f"Docker: build done ({image_name})")

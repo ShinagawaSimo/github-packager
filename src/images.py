@@ -1,4 +1,5 @@
 import json
+import re
 
 from pathlib import Path
 
@@ -8,6 +9,18 @@ from config import (
     LANGUAGE_TEST_COMMANDS,
 )
 from docker_tools import build_image
+
+
+def sanitize_repo_name(value: str) -> str:
+    """Normalize a repository name for Docker tag use."""
+    parts = [sanitize_tag_label(part) for part in value.split("/") if part]
+    return "/".join([part for part in parts if part]) or "image"
+
+
+def sanitize_tag_label(value: str) -> str:
+    """Normalize a tag label for Docker tag use."""
+    cleaned = re.sub(r"[^a-z0-9_.-]+", "-", value.lower()).strip("._-")
+    return cleaned or "latest"
 
 
 def write_metadata(build_dir: Path, instance: dict) -> None:
@@ -134,14 +147,16 @@ def build_instance_image(instance: dict, base_image: str, build_root: Path, tag:
     """
     build_dir = build_root / instance["instance_id"]
     build_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Image: prepare metadata for {instance['instance_id']}")
     write_metadata(build_dir, instance)
     packages = build_packages_for_language(instance["language"])
     package_line = ""
     if packages:
         package_line = f" {' '.join(packages)}"
+    print(f"Image: generate Dockerfile for {instance['instance_id']}")
     dockerfile_lines = [
         f"FROM {base_image}",
-        f"RUN apt-get update && apt-get install -y git ca-certificates curl{package_line} && rm -rf /var/lib/apt/lists/*",
+        f"RUN apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 update && apt-get install -y git ca-certificates curl{package_line} && rm -rf /var/lib/apt/lists/*",
         "WORKDIR /testbed",
         f"RUN git clone https://github.com/{instance['repo']} /testbed/repo",
         "WORKDIR /testbed/repo",
@@ -153,7 +168,10 @@ def build_instance_image(instance: dict, base_image: str, build_root: Path, tag:
     dockerfile_lines.append("COPY metadata/ /bundle/")
     dockerfile_lines.append("RUN chmod +x /bundle/run_eval.sh")
     dockerfile = "\n".join(dockerfile_lines)
-    image_name = f"{tag}:{instance['instance_id']}"
+    repo_tag = sanitize_repo_name(tag)
+    tag_label = sanitize_tag_label(instance["instance_id"])
+    image_name = f"{repo_tag}:{tag_label}"
+    print(f"Image: build {image_name}")
     build_image(
         image_name=image_name,
         dockerfile=dockerfile,
@@ -161,6 +179,7 @@ def build_instance_image(instance: dict, base_image: str, build_root: Path, tag:
         platform="linux/amd64",
         nocache=False,
     )
+    print(f"Image: build complete {image_name}")
     return image_name
 
 
@@ -253,6 +272,7 @@ def build_batch_image(
     """
     build_dir = build_root / "batch"
     build_dir.mkdir(parents=True, exist_ok=True)
+    print("Image: prepare batch metadata")
     write_batch_metadata(build_dir, instances)
     batch_packages = build_packages_for_language("batch")
     package_line = ""
@@ -260,7 +280,7 @@ def build_batch_image(
         package_line = f" {' '.join(batch_packages)}"
     dockerfile_lines = [
         f"FROM {base_image}",
-        f"RUN apt-get update && apt-get install -y git ca-certificates curl{package_line} && rm -rf /var/lib/apt/lists/*",
+        f"RUN apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 update && apt-get install -y git ca-certificates curl{package_line} && rm -rf /var/lib/apt/lists/*",
         "WORKDIR /testbed",
     ]
     for instance in instances:
@@ -280,7 +300,9 @@ def build_batch_image(
     dockerfile_lines.append("COPY metadata/ /bundle/")
     dockerfile_lines.append("RUN chmod +x /bundle/run_eval.sh")
     dockerfile = "\n".join(dockerfile_lines)
-    image_name = f"{tag}:batch"
+    repo_tag = sanitize_repo_name(tag)
+    image_name = f"{repo_tag}:batch"
+    print(f"Image: build {image_name}")
     build_image(
         image_name=image_name,
         dockerfile=dockerfile,
@@ -288,4 +310,5 @@ def build_batch_image(
         platform="linux/amd64",
         nocache=False,
     )
+    print(f"Image: build complete {image_name}")
     return image_name

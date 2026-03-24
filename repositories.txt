@@ -1,4 +1,2 @@
 # One repository per line
 # Lines starting with # are ignored
-https://github.com/OWNER/REPO1
-OWNER/REPO2

@@ -15,6 +15,7 @@ def main(
     batch: bool = False,
     output_dir: Optional[str] = None,
     max_pulls: Optional[int] = None,
+    max_issues: Optional[int] = None,
     issue_numbers: Optional[list[str]] = None,
     language: Optional[str] = None,
     image_tag: Optional[str] = None,
@@ -28,6 +29,7 @@ def main(
         batch: Whether to use repositories.txt batch mode.
         output_dir: Output directory for instances and images.
         max_pulls: Optional maximum number of pulls to process.
+        max_issues: Optional maximum number of issues to process.
         issue_numbers: Optional list of issue numbers to include.
         language: Optional override of detected language group.
         image_tag: Optional docker image tag prefix.
@@ -43,6 +45,7 @@ def main(
     output_path.mkdir(parents=True, exist_ok=True)
 
     if batch:
+        print("Step: load repositories list")
         repo_list_path = get_repo_list_path()
         repo_urls, errors = load_repo_list(repo_list_path)
         if errors:
@@ -50,10 +53,12 @@ def main(
                 print(f"Invalid repository entry: {line}", file=sys.stderr)
         all_instances = []
         for single_repo_url in repo_urls:
+            print(f"Step: process repository {single_repo_url}")
             instances = run_single_repo(
                 repo_url=single_repo_url,
                 output_dir=output_path / normalize_repo(single_repo_url).replace("/", "__"),
                 max_pulls=max_pulls,
+                max_issues=max_issues,
                 issue_numbers=issue_numbers,
                 language=language,
                 image_tag=image_tag,
@@ -61,6 +66,7 @@ def main(
             )
             all_instances.extend(instances)
         if single_image and not no_build and all_instances:
+            print("Step: build batch image")
             build_root = output_path / "images"
             build_root.mkdir(parents=True, exist_ok=True)
             tag = image_tag or "github_packager"
@@ -71,6 +77,7 @@ def main(
         repo_url=repo_url,
         output_dir=output_path,
         max_pulls=max_pulls,
+        max_issues=max_issues,
         issue_numbers=issue_numbers,
         language=language,
         image_tag=image_tag,
@@ -121,6 +128,7 @@ def run_single_repo(
     repo_url: str,
     output_dir: Path,
     max_pulls: Optional[int],
+    max_issues: Optional[int],
     issue_numbers: Optional[list[str]],
     language: Optional[str],
     image_tag: Optional[str],
@@ -132,6 +140,7 @@ def run_single_repo(
         repo_url: Repository URL or owner/name slug.
         output_dir: Output directory for instances and images.
         max_pulls: Optional maximum number of pulls to process.
+        max_issues: Optional maximum number of issues to process.
         issue_numbers: Optional list of issue numbers to include.
         language: Optional override of detected language group.
         image_tag: Optional docker image tag prefix.
@@ -141,21 +150,32 @@ def run_single_repo(
         Instance dictionaries for the repository.
     """
     repo_name = normalize_repo(repo_url)
+    print(f"Step: normalize repo url -> {repo_name}")
     repo = create_repo(repo_url)
+    print("Step: fetch README")
     readme_text = fetch_readme(repo)
+    print("Step: detect language")
     detected_language = language or detect_language(repo)
+    print(f"Step: build instances (language={detected_language})")
     issue_set = set(issue_numbers) if issue_numbers else None
-    instances = build_instances(repo, readme_text, detected_language, max_pulls, issue_set)
+    instances = build_instances(repo, readme_text, detected_language, max_pulls, max_issues, issue_set)
+    print(f"Step: instances count -> {len(instances)}")
     output_dir.mkdir(parents=True, exist_ok=True)
     instances_path = output_dir / f"{repo_name.replace('/', '__')}-instances.jsonl"
+    print(f"Step: write instances -> {instances_path}")
     write_instances(instances, instances_path)
     if no_build:
+        print("Step: skip image build (no_build enabled)")
+        return instances
+    if not instances:
+        print("Step: skip image build (no instances found)")
         return instances
     image_base = LANGUAGE_IMAGE_MAP.get(detected_language, LANGUAGE_IMAGE_MAP["python"])
     build_root = output_dir / "images"
     build_root.mkdir(parents=True, exist_ok=True)
     tag = image_tag or repo_name.replace("/", "__")
     for instance in instances:
+        print(f"Step: build image for instance {instance['instance_id']}")
         build_instance_image(instance, image_base, build_root, tag)
     return instances
 
@@ -171,6 +191,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch", action="store_true")
     parser.add_argument("--output_dir", type=str, required=True)
     parser.add_argument("--max_pulls", type=int, default=None)
+    parser.add_argument("--max_issues", type=int, default=None)
     parser.add_argument("--issue_numbers", nargs="*", default=None)
     parser.add_argument("--language", type=str, default=None)
     parser.add_argument("--image_tag", type=str, default=None)

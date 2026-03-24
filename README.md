@@ -5,12 +5,14 @@ A small tool that packages a GitHub repository into reproducible test images.
 ## Structure
 
 - src/
+- packager.py
 - repositories.txt
 - pyproject.toml
 - requirements.txt
 
 ## Files
 
+- packager.py: module entry loader for running from project root
 - src/packager.py: main entry point and CLI routing
 - src/config.py: language mappings, build/test commands, image bases
 - src/github_api.py: GitHub API access and issue/pull parsing
